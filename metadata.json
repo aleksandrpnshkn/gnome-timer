@@ -1,0 +1,10 @@
+{
+	"description": "Simple timer",
+	"name": "Timer",
+	"shell-version": [
+		"3.36.3"
+	],
+	"url": "",
+	"uuid": "timer@aleksandrkrzhn",
+	"version": 1
+}
