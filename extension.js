@@ -189,11 +189,8 @@ const TimerPopup = GObject.registerClass(
 );
 
 class Extension {
-    constructor() {
-        this.timerPopup = new TimerPopup();
-    }
-
     enable() {
+        this.timerPopup = new TimerPopup();
         Main.panel.addToStatusArea('TimerPopup', this.timerPopup, 1);
     }
 
