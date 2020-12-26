@@ -25,6 +25,7 @@ const St = imports.gi.St;
 const GObject = imports.gi.GObject;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
+const Slider = imports.ui.slider;
 const Mainloop = imports.mainloop;
 const GLib = imports.gi.GLib;
 
@@ -115,7 +116,7 @@ class Timer {
 
     isPlaying() {
         return this.state === STATE_PLAY;
-}
+    }
 
     isStopped() {
         return this.state === STATE_STOP;
@@ -127,6 +128,7 @@ const TimerPopup = GObject.registerClass(
         _init() {
             super._init(0);
 
+            this.MAX_HOURS = 10;
 
             this.playStateLabelMap = {
                 [STATE_PLAY]: 'Pause',
@@ -144,6 +146,22 @@ const TimerPopup = GObject.registerClass(
                 time: new Time(0, 40, 0), // default time
             };
             this.timer = new Timer(this.options.time);
+
+            this.sliders = {
+                hours: new Slider.Slider(this.options.time.hours / this.MAX_HOURS),
+                minutes: new Slider.Slider(this.options.time.minutes / 60),
+                seconds: new Slider.Slider(this.options.time.seconds / 60),
+            };
+
+            this.sliders.hours.connect('notify::value', this.handleTimeChange.bind(this, this.MAX_HOURS));
+            this.sliders.hours.accessible_name = 'Hours';
+
+            this.sliders.minutes.connect('notify::value', this.handleTimeChange.bind(this, 60));
+            this.sliders.minutes.accessible_name = 'Minutes';
+
+            this.sliders.seconds.connect('notify::value', this.handleTimeChange.bind(this, 60));
+            this.sliders.seconds.accessible_name = 'Seconds';
+
             // Only one St-element can be added. For multiple need to use a wrapper.
             // https://wiki.gnome.org/Projects/GnomeShell/Extensions/EcoDoc/Applet#Labels_and_Icons
             const box = new St.BoxLayout();
@@ -172,8 +190,27 @@ const TimerPopup = GObject.registerClass(
             this.menu.addMenuItem(this.menuItems.play);
             this.menu.addMenuItem(this.menuItems.stop);
 
+            const hoursItem = new PopupMenu.PopupBaseMenuItem();
+            hoursItem.add(this.sliders.hours);
+            this.menu.addMenuItem(hoursItem);
+
+            const minutesItem = new PopupMenu.PopupBaseMenuItem();
+            minutesItem.add(this.sliders.minutes);
+            this.menu.addMenuItem(minutesItem);
+
+            const secondsItem = new PopupMenu.PopupBaseMenuItem();
+            secondsItem.add(this.sliders.seconds);
+            this.menu.addMenuItem(secondsItem);
+
             this.menuItems.play.connect('activate', this.handlePlayClick.bind(this));
             this.menuItems.stop.connect('activate', () => this.stopTimer());
+        }
+
+        handleTimeChange() {
+            this.options.time.hours = Math.round(this.MAX_HOURS * this.sliders.hours.value);
+            this.options.time.minutes = Math.round(60 * this.sliders.minutes.value);
+            this.options.time.seconds = Math.round(60 * this.sliders.seconds.value);
+            this.updatePanelLabel();
         }
 
         updatePanelLabel(panelLabelText) {
