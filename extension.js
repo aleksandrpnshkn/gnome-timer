@@ -28,55 +28,97 @@ const PopupMenu = imports.ui.popupMenu;
 const Mainloop = imports.mainloop;
 const GLib = imports.gi.GLib;
 
-class Timer {
+class Time {
     constructor(hours, minutes, seconds) {
-        this.mcsLeft = null;
-        this.pauseTimestamp = null;
+        this.hours = hours;
+        this.minutes = minutes;
+        this.seconds = seconds;
+    }
 
+    getFormatted() {
+        return String(this.hours).padStart(2, '0')
+            + ':' + String(this.minutes).padStart(2, '0')
+            + ':' + String(this.seconds).padStart(2, '0');
+    }
+}
+
+// unfortunately static properties are not implemented
+const STATE_PLAY = 0;
+const STATE_PAUSE = 1;
+const STATE_STOP = 2;
+
+class Timer {
+    constructor(time) {
         this.SECOND_TO_MS = 1000000;
         this.MINUTE_TO_MS = 1000000 * 60;
         this.HOUR_TO_MS = 1000000 * 60 * 60;
 
-        this.finishTimestamp = GLib.get_real_time()
-            + this.SECOND_TO_MS * seconds
-            + this.MINUTE_TO_MS * minutes
-            + this.HOUR_TO_MS * hours;
+        this.mcsLeft = null;
+        this.pauseTimestamp = null;
+        this.finishTimestamp = null;
+
+        this.setTime(time);
+        this.state = STATE_STOP;
+    }
+
+    setTime(time) {
+        this.time = new Time(time.hours, time.minutes, time.seconds);
     }
 
     update() {
         if (this.isPaused()) {
-            return this.mcsLeft;
+            return;
         }
 
         this.mcsLeft = this.finishTimestamp - GLib.get_real_time();
 
-        if (this.isFinished()) {
-            return false;
+        if (this.mcsLeft <= 0) {
+            this.stop();
         }
 
-        this.seconds = Math.floor(this.mcsLeft / this.SECOND_TO_MS % 60);
-        this.minutes = Math.floor(this.mcsLeft / this.MINUTE_TO_MS % 60);
-        this.hours = Math.floor(this.mcsLeft / this.HOUR_TO_MS);
+        this.time.seconds = Math.floor(this.mcsLeft / this.SECOND_TO_MS % 60);
+        this.time.minutes = Math.floor(this.mcsLeft / this.MINUTE_TO_MS % 60);
+        this.time.hours = Math.floor(this.mcsLeft / this.HOUR_TO_MS);
+    }
 
-        return this.mcsLeft;
+    start() {
+        this.finishTimestamp = GLib.get_real_time()
+            + this.SECOND_TO_MS * this.time.seconds
+            + this.MINUTE_TO_MS * this.time.minutes
+            + this.HOUR_TO_MS * this.time.hours;
+        this.state = STATE_PLAY;
+        this.update();
     }
 
     pause() {
         this.pauseTimestamp = GLib.get_real_time();
+        this.state = STATE_PAUSE;
     }
 
     resume() {
         // Add time spent in pause
         this.finishTimestamp += GLib.get_real_time() - this.pauseTimestamp;
         this.pauseTimestamp = null;
+        this.state = STATE_PLAY;
     }
 
-    isFinished() {
-        return this.mcsLeft <= 0;
+    stop() {
+        this.time.seconds = 0;
+        this.time.minutes = 0;
+        this.time.hours = 0;
+        this.state = STATE_STOP;
     }
 
     isPaused() {
-        return this.pauseTimestamp !== null;
+        return this.state === STATE_PAUSE;
+    }
+
+    isPlaying() {
+        return this.state === STATE_PLAY;
+}
+
+    isStopped() {
+        return this.state === STATE_STOP;
     }
 }
 
@@ -85,28 +127,33 @@ const TimerPopup = GObject.registerClass(
         _init() {
             super._init(0);
 
-            this.STATE_PLAY = 0;
-            this.STATE_PAUSE = 1;
-            this.STATE_STOP = 2;
-
-            this.state = this.STATE_STOP;
 
             this.playStateLabelMap = {
-                [this.STATE_PLAY]: 'Pause',
-                [this.STATE_PAUSE]: 'Resume',
-                [this.STATE_STOP]: 'Start',
+                [STATE_PLAY]: 'Pause',
+                [STATE_PAUSE]: 'Resume',
+                [STATE_STOP]: 'Start',
             };
 
+            this.playStateIconMap = {
+                [STATE_PLAY]: 'media-playback-start-symbolic',
+                [STATE_PAUSE]: 'media-playback-pause-symbolic',
+                [STATE_STOP]: 'media-playback-stop-symbolic',
+            };
+
+            this.options = {
+                time: new Time(0, 40, 0), // default time
+            };
+            this.timer = new Timer(this.options.time);
             // Only one St-element can be added. For multiple need to use a wrapper.
             // https://wiki.gnome.org/Projects/GnomeShell/Extensions/EcoDoc/Applet#Labels_and_Icons
             const box = new St.BoxLayout();
             this.panelLabel = new St.Label({
                 style_class: 'timer_panel-label',
-                text: 'Timer',
+                text: this.options.time.getFormatted(),
                 y_align: St.Align.END,
             });
             this.panelIcon = new St.Icon({
-                icon_name: 'timer-symbolic',
+                icon_name: this.playStateIconMap[this.timer.state],
                 style_class: 'system-status-icon',
             });
             box.add_actor(this.panelIcon);
@@ -126,64 +173,59 @@ const TimerPopup = GObject.registerClass(
             this.menu.addMenuItem(this.menuItems.stop);
 
             this.menuItems.play.connect('activate', this.handlePlayClick.bind(this));
-            this.menuItems.stop.connect('activate', () => this.stopTimer('00:00:00'));
+            this.menuItems.stop.connect('activate', () => this.stopTimer());
+        }
+
+        updatePanelLabel(panelLabelText) {
+            if (panelLabelText) {
+                this.panelLabel.set_text(panelLabelText);
+            }
+            else if (this.timer.isStopped()) {
+                this.panelLabel.set_text(this.options.time.getFormatted());
+            }
+            else {
+                this.panelLabel.set_text(this.timer.time.getFormatted());
+            }
+
+            this.panelIcon.set_icon_name(this.playStateIconMap[this.timer.state]);
         }
 
         handlePlayClick() {
-            if (this.isStopped()) {
-                this.state = this.STATE_PLAY;
-                this.timer = new Timer(0, 0, 5);
-                this.updateTime(); // call before the timeout
-                this.timeout = Mainloop.timeout_add(500, this.updateTime.bind(this));
+            if (this.timer.isStopped()) {
+                this.timer.setTime(this.options.time);
+                this.timer.start();
+                this.updateTimer(); // call before the timeout
+                this.timeout = Mainloop.timeout_add(500, this.updateTimer.bind(this));
             }
-            else if (this.isPlaying()) {
-                this.state = this.STATE_PAUSE;
+            else if (this.timer.isPlaying()) {
                 this.timer.pause();
             }
-            else if (this.isPaused()) {
-                this.state = this.STATE_PLAY;
+            else if (this.timer.isPaused()) {
                 this.timer.resume();
             }
 
             // after timeout manipulations
-            this.menuItems.play.label.set_text(this.playStateLabelMap[this.state]);
+            this.menuItems.play.label.set_text(this.playStateLabelMap[this.timer.state]);
         }
 
-        updateTime() {
-            const msLeft = this.timer.update();
+        updateTimer() {
+            this.timer.update();
 
-            if (msLeft === false) {
+            if (this.timer.isStopped()) {
                 this.stopTimer('Done!');
                 Main.notify('Done!');
                 return false;
             }
 
-            this.panelLabel.set_text(
-                String(this.timer.hours).padStart(2, '0')
-                + ':' + String(this.timer.minutes).padStart(2, '0')
-                + ':' + String(this.timer.seconds).padStart(2, '0')
-            );
-
+            this.updatePanelLabel();
             return true;
         }
 
         stopTimer(panelLabelText) {
-            this.state = this.STATE_STOP;
             Mainloop.source_remove(this.timeout);
-            this.panelLabel.set_text(panelLabelText);
-            this.menuItems.play.label.set_text(this.playStateLabelMap[this.STATE_STOP]);
-        }
-
-        isPaused() {
-            return this.state === this.STATE_PAUSE;
-        }
-
-        isPlaying() {
-            return this.state === this.STATE_PLAY;
-        }
-
-        isStopped() {
-            return this.state === this.STATE_STOP;
+            this.timer.stop();
+            this.updatePanelLabel(panelLabelText);
+            this.menuItems.play.label.set_text(this.playStateLabelMap[STATE_STOP]);
         }
     }
 );
