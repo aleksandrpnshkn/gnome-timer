@@ -58,10 +58,16 @@ class Timer {
         this.pauseTimestamp = null;
         this.finishTimestamp = null;
 
-        this.setTime(time);
+        if (time) {
+            this.setTime(time);
+        }
+
         this.state = STATE_STOP;
     }
 
+    /**
+     * @param {Time} time
+     */
     setTime(time) {
         this.time = new Time(time.hours, time.minutes, time.seconds);
     }
@@ -125,8 +131,10 @@ class Timer {
 
 const TimerPopup = GObject.registerClass(
     class TimerPopup extends PanelMenu.Button {
-        _init() {
+        _init(timer) {
             super._init(0);
+
+            this.timer = timer;
 
             this.MAX_HOURS = 10;
 
@@ -142,10 +150,16 @@ const TimerPopup = GObject.registerClass(
                 [STATE_STOP]: 'media-playback-stop-symbolic',
             };
 
+            const defaultTime = new Time(0, 40, 0);
+
             this.options = {
-                time: new Time(0, 40, 0), // default time
+                time: defaultTime,
             };
-            this.timer = new Timer(this.options.time);
+
+            // Timer could be not stopped if PC was in sleep mode with active timer
+            if (this.timer.isStopped()) {
+                this.timer.setTime(this.options.time);
+            }
 
             this.sliders = {
                 hours: new Slider.Slider(this.options.time.hours / this.MAX_HOURS),
@@ -153,13 +167,13 @@ const TimerPopup = GObject.registerClass(
                 seconds: new Slider.Slider(this.options.time.seconds / 60),
             };
 
-            this.sliders.hours.connect('notify::value', this.handleTimeChange.bind(this, this.MAX_HOURS));
+            this.sliders.hours.connect('notify::value', this.handleTimeInput.bind(this, this.MAX_HOURS));
             this.sliders.hours.accessible_name = 'Hours';
 
-            this.sliders.minutes.connect('notify::value', this.handleTimeChange.bind(this, 60));
+            this.sliders.minutes.connect('notify::value', this.handleTimeInput.bind(this, 60));
             this.sliders.minutes.accessible_name = 'Minutes';
 
-            this.sliders.seconds.connect('notify::value', this.handleTimeChange.bind(this, 60));
+            this.sliders.seconds.connect('notify::value', this.handleTimeInput.bind(this, 60));
             this.sliders.seconds.accessible_name = 'Seconds';
 
             // Only one St-element can be added. For multiple need to use a wrapper.
@@ -204,9 +218,13 @@ const TimerPopup = GObject.registerClass(
 
             this.menuItems.play.connect('activate', this.handlePlayClick.bind(this));
             this.menuItems.stop.connect('activate', () => this.stopTimer());
+
+            if (! this.timer.isStopped()) {
+                this.startDisplayingTime();
+            }
         }
 
-        handleTimeChange() {
+        handleTimeInput() {
             this.options.time.hours = Math.round(this.MAX_HOURS * this.sliders.hours.value);
             this.options.time.minutes = Math.round(60 * this.sliders.minutes.value);
             this.options.time.seconds = Math.round(60 * this.sliders.seconds.value);
@@ -229,10 +247,7 @@ const TimerPopup = GObject.registerClass(
 
         handlePlayClick() {
             if (this.timer.isStopped()) {
-                this.timer.setTime(this.options.time);
-                this.timer.start();
-                this.updateTimer(); // call before the timeout
-                this.timeout = Mainloop.timeout_add(500, this.updateTimer.bind(this));
+                this.startTimer();
             }
             else if (this.timer.isPlaying()) {
                 this.timer.pause();
@@ -243,6 +258,12 @@ const TimerPopup = GObject.registerClass(
 
             // after timeout manipulations
             this.menuItems.play.label.set_text(this.playStateLabelMap[this.timer.state]);
+        }
+
+        startTimer() {
+            this.timer.setTime(this.options.time);
+            this.timer.start();
+            this.startDisplayingTime();
         }
 
         updateTimer() {
@@ -259,17 +280,39 @@ const TimerPopup = GObject.registerClass(
         }
 
         stopTimer(panelLabelText) {
-            Mainloop.source_remove(this.timeout);
+            this.stopDisplayingTime();
             this.timer.stop();
             this.updatePanelLabel(panelLabelText);
             this.menuItems.play.label.set_text(this.playStateLabelMap[STATE_STOP]);
+        }
+
+        startDisplayingTime() {
+            this.updateTimer(); // call before the timeout
+            this.timeout = Mainloop.timeout_add(500, this.updateTimer.bind(this));
+        }
+
+        stopDisplayingTime() {
+            Mainloop.source_remove(this.timeout);
+        }
+
+        /**
+         * Destroy TimerPopup. Timeouts should't work in sleep mode
+         */
+        destroy() {
+            this.stopDisplayingTime();
+            super.destroy();
         }
     }
 );
 
 class Extension {
+    constructor() {
+        // Timer instance must remain in memory, otherwise timer state will be reset after wake up from sleep mode
+        this.timer = new Timer();
+    }
+
     enable() {
-        this.timerPopup = new TimerPopup();
+        this.timerPopup = new TimerPopup(this.timer);
         Main.panel.addToStatusArea('TimerPopup', this.timerPopup, 1);
     }
 
